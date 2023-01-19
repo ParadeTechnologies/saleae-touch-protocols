@@ -5,8 +5,9 @@ Technologies Touch Protocols High Level Analyzer for the Saleae Logic2 software.
 
 from typing import List
 from saleae.analyzers import AnalyzerFrame #pylint: disable=import-error
+from pt_protocol import PtProtocol
 
-class PIP3:
+class PIP3 (PtProtocol):
     """
     Parade Technologies Packet Interface Protocol Version 3
     I2C packet parser.
@@ -56,6 +57,7 @@ class PIP3:
         }
 
     def __init__(self):
+        PtProtocol.__init__(self)
         self.hid_register_address_output = 0x0004
         self.hid_register_address_command = 0x0005
         self.hid_register_address_pip2 = 0x0101
@@ -65,14 +67,6 @@ class PIP3:
         self.idx_hid_register_address_msb = 1
 
         # PIP3 Generic (Command or Response)
-
-        # Keep track of the start and end time of a PIP3 command and its PIP3 response.
-        self.cmdrsp_start_time = None
-        self.cmdrsp_end_time = None
-
-        # PIP3 command only start and end time.
-        self.cmd_start_time = None
-        self.cmd_end_time = None
 
         # PIP3 response only start and end time.
         self.rsp_start_time = None
@@ -84,11 +78,6 @@ class PIP3:
         # PIP3 Command
         self.pip3_min_cmd_packet_len = 14
         self.idx_frpt_mrpt = 3 # Special. Only in first report.
-        self.cmd_len = 0
-        self.cmd_seq = 0
-        self.cmd_tag = 0
-        self.cmd_cmd = 0
-        self.cmd_crc = 0
         self.cmd_register_header_len = 6
         self.cmd_output_header_len = 5
         self.cmd_header_len = 4
@@ -96,10 +85,6 @@ class PIP3:
 
         #self.cmd_pkt_payload[0] = 0
 
-        # PIP3 Command Wrapper Fields
-        self.cmd_len = 0
-        self.cmd_payload = 0
-        self.cmd_crc = 0
 
         self.idx_len_lsb = 0
         self.idx_len_msb = 1
@@ -122,16 +107,6 @@ class PIP3:
         self.rsp_offset_crc_msb = -1
         self.rsp_offset_crc_lsb = -0
 
-        # PIP3 Response Wrapper Fields
-        self.rsp_len = 0
-        self.rsp_mdata = 0
-        self.rsp_tag = 0
-        self.rsp_seq = 0
-        self.rsp_rsp = 0
-        self.rsp_cmd_id = 0
-        self.rsp_payload = None
-        self.rsp_status = None
-        self.rsp_crc = 0
 
     def process_i2c_packet(self, hla_frames, packet):
         """
@@ -144,9 +119,11 @@ class PIP3:
         elif(packet_len == 2 and packet["read"] is True):
             # PIP3 Firmware Reset Sentinel.
             if ((packet["data"][0] == 0x00) and (packet["data"][1] == 0x00)):
-                self.cmdrsp_start_time = packet["start_time"]
-                self.cmdrsp_end_time = packet["end_time"]
-                self.append_frame(hla_frames, "PIP3", "FW Reset Sentinel")
+                self.transaction_start_time = packet["start_time"]
+                self.transaction_end_time = packet["end_time"]
+                self.cmd_cmd_name = "FW Reset Sentinel"
+                self.expecting_cmd_response = False
+                self.append_frame(hla_frames, "PIP3", "")
         elif packet["write"] is True:
             self.process_command(hla_frames, packet)
         elif (packet["read"] is True and
@@ -202,6 +179,8 @@ class PIP3:
             self.idx_hid_register_address_lsb,
             self.idx_hid_register_address_msb)
 			):
+            self.transaction_start_time = packet["start_time"]
+            self.transaction_end_time = packet["end_time"]
             self.append_frame(hla_frames, "PIP3", "ERROR: Short Write Packet")
             return
         hid_register_address = packet["data"][self.idx_hid_register_address_lsb]
@@ -217,6 +196,7 @@ class PIP3:
             return
         else:
             self.debug("Non PIP3 HID Register Address: " + str(hid_register_address))
+            self.expecting_cmd_response = False
             return
 
         # If expecting_cmd_response is True we there may have been a command that did not
@@ -225,8 +205,8 @@ class PIP3:
             self.append_frame(hla_frames, "PIP3 Error", "PIP3 command with no response")
 
         self.expecting_cmd_response = True
-        self.cmdrsp_start_time = packet["start_time"]
-        self.cmdrsp_end_time = packet["end_time"]
+        self.transaction_start_time = packet["start_time"]
+        self.transaction_end_time = packet["end_time"]
 
 
         # Check that the packet is long enough that a length can be extracted.
@@ -252,9 +232,17 @@ class PIP3:
         self.cmd_seq = packet["data"][offset + self.idx_mdata_tag_seq] & 0x07
         self.cmd_tag = (packet["data"][offset + self.idx_mdata_tag_seq] & 0x08) >> 3
         self.cmd_cmd = packet["data"][offset + self.idx_cmd_id] & 0x7F
+        self.cmd_cmd_name = PIP3.CMD_DICT.get(self.cmd_cmd)
         self.cmd_crc = (packet["data"][offset + self.idx_len_lsb + self.cmd_len - 2] << 8)
         self.cmd_crc += packet["data"][offset + self.idx_len_msb + self.cmd_len - 2]
         self.rsp_status = None # Clear value in case a response never comes.
+
+        # Commands with no response
+        if self.cmd_cmd == 0x04: # Switch Image.
+            self.expecting_cmd_response = False
+            self.append_frame(hla_frames, "PIP3", "")
+
+
 
     def process_response(self, hla_frames, packet):
         """
@@ -274,97 +262,18 @@ class PIP3:
 
         if not pkt_mrpt:
             self.expecting_cmd_response = False
-            self.cmdrsp_end_time = packet["end_time"]
+            self.transaction_end_time = packet["end_time"]
             if len(self.pkt_data) < self.rsp_min_len:
-                self.append_frame(hla_frames, "PIP3", \
-                    f"ERROR:Response is shorter ({len(self.pkt_data)}) than the minimum length ({self.rsp_min_len}).")
+                self.append_frame(
+                    hla_frames,
+                    "PIP3",
+                    (
+                        f"ERROR:Response is shorter ({len(self.pkt_data)}) "
+                        "than the minimum length ({self.rsp_min_len})."
+                    )
+                )
             else:
                 self.pip3_parse_response_header()
                 self.pip3_remove_zero_padding()
                 self.pip3_extract_rsp_payload()
                 self.append_frame(hla_frames, "PIP3", "")
-
-    def append_frame(self, hla_frames: List[AnalyzerFrame], frame_type: str, message: str):
-        """
-        Appends a Saleae HLA frame to the hla_frames object. The frame uses data from the
-        PIP3 object (e.g. self.cmd_pkt_cmd) and the method input variables to product
-        the lla_frame.
-        """
-
-        if self.cmd_tag is None:
-            command_tag = ""
-        else:
-            command_tag = f"{self.cmd_tag:d}"
-        if self.cmd_seq is None:
-            command_seq = ""
-        else:
-            command_seq = f"{self.cmd_seq:d}"
-        if self.cmd_cmd is None:
-            command_cmd = ""
-            command_name = ""
-        else:
-            command_cmd = f"0x{self.cmd_cmd:02X}"
-            command_name = f"{PIP3.CMD_DICT.get(self.cmd_cmd)}"
-        if self.cmd_len is None:
-            command_len = ""
-        else:
-            command_len = f"{self.cmd_len:d}"
-        if self.cmd_payload is None :
-            command_payload = ""
-        else:
-            command_payload = f"{self.cmd_payload}"
-        if self.cmd_crc is None:
-            command_crc = ""
-        else:
-            command_crc = f"0x{self.cmd_crc:04X}"
-        if self.rsp_len is None:
-            response_len = ""
-        else:
-            response_len = f"{self.rsp_len:d}"
-        if self.rsp_payload is None:
-            response_payload = ""
-        else:
-            response_payload = f"{self.rsp_payload}"
-        if self.rsp_crc is None:
-            response_crc = ""
-        else:
-            response_crc = f"0x{self.rsp_crc:04X}"
-        if self.rsp_status is None:
-            response_code = ""
-        else:
-            response_code = f"0x{self.rsp_status:02X}"
-
-        hla_frames.append(AnalyzerFrame(
-            frame_type,
-            self.cmdrsp_start_time,
-            self.cmdrsp_end_time,
-            data={
-                "ZMsg"      : message,
-                "Tag"       : command_tag,
-                "Seq"       : command_seq,
-                "Cmd"       : command_cmd,
-                "Cmd_Name"  : command_name,
-                "Status"    : response_code,
-                "C Len"     : command_len,
-                "C Payload" : command_payload,
-                "C CRC"     : command_crc,
-                "R Len"     : response_len,
-                "R Payload" : response_payload,
-                "R CRC"     : response_crc,
-            }
-        ))
-        self.cmd_tag = None
-        self.cmd_seq = None
-        self.cmd_cmd = None
-        self.cmd_len = None
-        self.cmd_payload = None
-        self.cmd_crc = None
-        self.rsp_len = None
-        self.rsp_payload = None
-        self.rsp_crc = None
-
-    def debug(self, message):
-        """
-        Debug method that only outputs when debug is enabled in the user preferences.
-        """
-        print(f"DEBUG [{self.cmdrsp_start_time}]: {message}")

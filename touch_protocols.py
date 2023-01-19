@@ -17,7 +17,16 @@ class PtTouchHLA(HighLevelAnalyzer):
     """
     Parade Technologies subclass of the Saleae HighLevelAnalyser class.
     """
-    my_choices_setting = ChoicesSetting(["HID-I2C", "PIP1", "PIP2", "PIP3"], label="Protocol")
+    selected_protocol = ChoicesSetting(
+        ["HID-I2C", "PIP1", "PIP2", "PIP3"], label="Protocol"
+    )
+    selected_debug_level = ChoicesSetting(
+        ["Fatal", "None", "Warning", "Info", "Debug", "Trace"], label="Terminal Verbose Level"
+    )
+
+    enable_hid_pip3_reports = ChoicesSetting(
+        ["No", "Yes"], label="Include PIP3 Reports in HID Analyzer"
+    )
 
     SUPPORTED_PROTOCOLS = {
         "PIP1": PIP1,
@@ -38,8 +47,14 @@ class PtTouchHLA(HighLevelAnalyzer):
         "PIP3": {
             "format": "{{data.Cmd_Name}}: {{data.Status}}"
         },
+        "PIP3 Error": {
+            "format": "ERROR: {{data.Cmd_Name}}: {{data.Status}}"
+        },
         "PIP2": {
             "format": "{{data.Cmd_Name}}"
+        },
+        "PIP2 Error": {
+            "format": "ERROR: {{data.Cmd_Name}}"
         },
         "PIP1": {
             "format": "{{data.Cmd_Name}}: {{data.Status}}"
@@ -60,22 +75,18 @@ class PtTouchHLA(HighLevelAnalyzer):
         }
 
         try:
-            self.protocol = PtTouchHLA.SUPPORTED_PROTOCOLS[self.my_choices_setting] ()
+            self.protocol = PtTouchHLA.SUPPORTED_PROTOCOLS[self.selected_protocol] ()
         except KeyError:
-            print(f"ERROR: Unknown Protocol Setting {self.my_choices_setting}")
-
-    def identify_packet_type(self, frames):
-        """
-        Based on the user setting call the correct protocol object.
-        """
-        if self.my_choices_setting == "PIP1":
-            print("PIP1 not supported yet.")
-        elif self.my_choices_setting == "PIP2" :
-            self.protocol.process_i2c_packet(frames, self.packet)
-        elif self.my_choices_setting == "HID-I2C":
-            self.protocol.process_i2c_packet(frames, self.packet)
-        elif self.my_choices_setting == "PIP3":
-            self.protocol.process_i2c_packet(frames, self.packet)
+            print(f"ERROR: Unknown Protocol Setting {self.selected_protocol}")
+        self.protocol.set_verbose_level(self.selected_debug_level)
+        if self.selected_protocol == "HID-I2C":
+            print(self.enable_hid_pip3_reports)
+            if self.enable_hid_pip3_reports == "No":
+                self.protocol.enable_hid_pip3_reports = False
+                print("false")
+            else:
+                self.protocol.enable_hid_pip3_reports = True
+                print("true")
 
     def decode(self, frame: AnalyzerFrame):
         """
@@ -100,7 +111,7 @@ class PtTouchHLA(HighLevelAnalyzer):
         # The I2C stop bit indicates the end of an I2C packet.
         elif frame.type == "stop":
             if (self.packet["start_time"] is not None) and (self.packet["end_time"] is not None):
-                self.identify_packet_type(frames)
+                self.protocol.process_i2c_packet(frames, self.packet)
             else:
                 print("Got stop bit with either start_time or end_time not set.")
             # When the I2C stop bit is seen always reset packet values.
