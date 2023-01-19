@@ -2,10 +2,10 @@
   "name": "Parade Technologies TrueTouch Protocols",
   "apiVersion": "1.0.0",
   "author": "Parade Technologies",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Parade Technologies TrueTouch protocols (PIP1, PIP2, PIP3, HID-I2C)",
   "extensions": {
-    "(DEV) Parade Technologies": {
+    "Parade Technologies": {
       "type": "HighLevelAnalyzer",
       "entryPoint": "touch_protocols.PtTouchHLA"
     }
