@@ -36,22 +36,22 @@ class PtProtocol:
         # 6: Trace
         self.verbose_level = PtProtocol.VERBOSE_INFO
 
-        self.cmd_len = 0
-        self.cmd_seq = 0
-        self.cmd_tag = 0
-        self.cmd_cmd = 0
+        self.cmd_len = None
+        self.cmd_seq = None
+        self.cmd_tag = None
+        self.cmd_cmd = None
         self.cmd_cmd_name = ""
-        self.cmd_crc = 0
-        self.cmd_payload = 0
-        self.rsp_len = 0
-        self.rsp_mdata = 0
-        self.rsp_tag = 0
-        self.rsp_seq = 0
-        self.rsp_rsp = 0
-        self.rsp_cmd_id = 0
+        self.cmd_crc = None
+        self.cmd_payload = None
+        self.rsp_len = None
+        self.rsp_mdata = None
+        self.rsp_tag = None
+        self.rsp_seq = None
+        self.rsp_rsp = None
+        self.rsp_cmd_id = None
         self.rsp_payload = None
         self.rsp_status = None
-        self.rsp_crc = 0
+        self.rsp_crc = None
 
 
     def append_frame(self, hla_frames: List[AnalyzerFrame], frame_type: str, message: str):
@@ -59,19 +59,25 @@ class PtProtocol:
         Appends a Saleae HLA frame to the hla_frames object. The columns are defined by the
         keys put into the data dictionary. To avoid many sparsely populated columns this
         class controls the list of possible keys. All key values are set to None at the end
-        of this method. If a key's value is none at the start of this method that that key
+        of this method. If a key's value is none at the start of this method and that key
         is not added to the dictionary. This ensures that only the columns that are used
         show up in the Saleae Logic2 GUI.
         """
         data = {}
         if self.cmd_tag is not None:
             data["Tag"] = f"{self.cmd_tag:d}"
+        elif self.rsp_tag is not None:
+            data["Tag"] = f"{self.rsp_tag:d}"
         if self.cmd_seq is not None:
             data["Seq"] = f"{self.cmd_seq:d}"
+        elif self.rsp_seq is not None:
+            data["Seq"] = f"{self.rsp_seq:d}"
         if self.cmd_cmd is not None:
             data["Cmd"] = f"0x{self.cmd_cmd:02X}"
         if self.cmd_cmd_name is not None:
             data["Cmd_Name"] = self.cmd_cmd_name
+        else:
+            data["Cmd_Name"] = "Unknown Command"
         if self.cmd_len is not None:
             data["C Len"] = f"{self.cmd_len:d}"
         if self.cmd_payload is not None :
@@ -136,7 +142,7 @@ class PtProtocol:
     def process_i2c_packet(self, hla_frames, packet):
         """
         Protocols must implement this method. This is the method that
-        PtTouchHLA will call when a packet of dat is ready to be
+        PtTouchHLA will call when a packet of data is ready to be
         processed.
         """
         self.transaction_start_time = packet["start_time"]

@@ -19,6 +19,7 @@ class HID1 (PtProtocol):
 
     # HID Input Report Constants
     IDX_INPUT_REPORT_MIN_LENGTH = 3
+    IDX_INPUT_REPORT_PAYLOAD_START = 3
     IDX_INPUT_REPORT_LEN_LSB = 0
     IDX_INPUT_REPORT_LEN_MSB = 1
     IDX_INPUT_REPORT_ID = 2
@@ -29,6 +30,7 @@ class HID1 (PtProtocol):
 
     # HID Command Register Constants
     IDX_CMD_REGISTER_MIN_LENGTH = 9
+    IDX_CMD_REGISTER_PAYLOAD_START = 9
     IDX_CMD_REGISTER_LENGTH_OF_REPORT_LSB = 6
     IDX_CMD_REGISTER_LENGTH_OF_REPORT_MSB = 7
     IDX_CMD_REGISTER_REPORT_ID = 8
@@ -38,6 +40,7 @@ class HID1 (PtProtocol):
     IDX_OUT_REGISTER_LENGTH_OF_REPORT_LSB = 2
     IDX_OUT_REGISTER_LENGTH_OF_REPORT_MSB = 3
     IDX_OUT_REGISTER_REPORT_ID = 4
+    IDX_OUT_REGISTER_PAYLOAD_START = 5
 
     # Dictionary of known PIP HID report IDs
     REPORT_ID_DICT_PIP3 = {
@@ -93,11 +96,15 @@ class HID1 (PtProtocol):
             if self.register_address == HID1.REGISTER_ADDRESS_HID_DESCRIPTOR:
                 self.hid_descriptor_request_active = True
                 self.cmd_cmd_name = HID1.REGISTER_DICT.get(self.register_address)
-                self.report_len = len(packet["data"])
+                self.cmd_len = len(packet["data"])
+                self.cmd_payload = "0x " + " ".join([f"{x:02X}" \
+                    for x in packet["data"]])
             elif self.register_address == HID1.REGISTER_ADDRESS_REPORT_DESCRIPTOR:
                 self.hid_descriptor_request_active = True
                 self.cmd_cmd_name = HID1.REGISTER_DICT.get(self.register_address)
-                self.report_len = len(packet["data"])
+                self.cmd_len = len(packet["data"])
+                self.cmd_payload = "0x " + " ".join([f"{x:02X}" \
+                    for x in packet["data"]])
             elif self.register_address == HID1.REGISTER_ADDRESS_OUTPUT:
                 if packet_len >= HID1.IDX_OUT_REGISTER_MIN_LENGTH:
                     self.report_id = packet["data"][HID1.IDX_OUT_REGISTER_REPORT_ID]
@@ -107,7 +114,11 @@ class HID1 (PtProtocol):
                     if (self.report_id in HID1.REPORT_ID_DICT_PIP3 and
                         self.enable_hid_pip3_reports
                     ):
+                        self.cmd_len = self.report_len
                         self.cmd_cmd_name = HID1.REPORT_ID_DICT_PIP3.get(self.report_id)
+                        self.cmd_payload = "0x " + " ".join([f"{x:02X}" \
+                            for x in packet["data"][self.IDX_OUT_REGISTER_PAYLOAD_START:self.report_len
+                                + self.IDX_OUT_REGISTER_PAYLOAD_START]])
                         self.append_frame(hla_frames, "HID1", "")
             elif self.register_address == HID1.REGISTER_ADDRESS_COMMAND:
                 if packet_len >= HID1.IDX_CMD_REGISTER_MIN_LENGTH:
@@ -122,18 +133,27 @@ class HID1 (PtProtocol):
                             f"{HID1.REPORT_ID_DICT_PIP3.get(self.report_id)} "
                             f"({HID1.REGISTER_DICT.get(self.register_address)})"
                         )
+                        self.cmd_payload = "0x " + " ".join([f"{x:02X}" \
+                            for x in packet["data"][self.IDX_CMD_REGISTER_PAYLOAD_START:self.report_len
+                                + self.IDX_CMD_REGISTER_PAYLOAD_START]])
+                        self.cmd_len = self.report_len
                         self.append_frame(hla_frames, "HID1", "")
         elif (packet["read"] is True and packet_len >= HID1.IDX_INPUT_REPORT_MIN_LENGTH):
             self.transaction_end_time = packet["end_time"]
             if self.hid_descriptor_request_active:
+                self.rsp_len = len(packet["data"])
+                self.rsp_payload = "0x " + " ".join([f"{x:02X}" \
+                            for x in packet["data"]])
                 self.append_frame(hla_frames, "HID1", "")
                 self.hid_descriptor_request_active = False
                 return
             self.transaction_start_time = packet["start_time"]
-            self.cmd_len = packet["data"][HID1.IDX_INPUT_REPORT_LEN_LSB]
-            self.cmd_len += (packet["data"][HID1.IDX_INPUT_REPORT_LEN_MSB] << 8)
+            self.rsp_len = packet["data"][HID1.IDX_INPUT_REPORT_LEN_LSB]
+            self.rsp_len += (packet["data"][HID1.IDX_INPUT_REPORT_LEN_MSB] << 8)
             report_id = packet["data"][HID1.IDX_INPUT_REPORT_ID]
-
+            if packet_len >= self.IDX_INPUT_REPORT_PAYLOAD_START:
+                self.rsp_payload = "0x " + " ".join([f"{x:02X}" \
+                    for x in packet["data"][self.IDX_INPUT_REPORT_PAYLOAD_START:]])
             self.debug(f"{self.enable_hid_pip3_reports}: ID {report_id}")
             if report_id in HID1.REPORT_ID_DICT_PIP3:
                 if self.enable_hid_pip3_reports:

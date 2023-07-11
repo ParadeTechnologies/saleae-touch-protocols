@@ -35,7 +35,8 @@ class PIP2 (PtProtocol):
     def __init__(self):
         PtProtocol.__init__(self)
         # PIP2 Command
-        self.pip2_min_cmd_packet_len = 7
+        self.pip2_cmd_reg_header_len = 2
+        self.pip2_min_cmd_packet_len = 8
         self.idx_cmd_len_lsb = 2
         self.idx_cmd_len_msb = 3
         self.pip2_index_mdata_tag_seq = 4
@@ -50,11 +51,13 @@ class PIP2 (PtProtocol):
         # PIP2 Response
         self.rsp_header_len = 4
         self.rsp_footer_len = 2
+        self.rsp_min_rsp_len = 6
         self.idx_rsp_payload_start = 4
         self.idx_rsp_len_lsb = 0
         self.idx_rsp_len_msb = 1
-        self.idx_rsp_crc_msb = -2
-        self.idx_rsp_crc_lsb = -1
+        self.idx_rsp_cmd_id = 3
+        self.idx_rsp_crc_msb = -1
+        self.idx_rsp_crc_lsb = -2
 
         self.expecting_cmd_response = False
 
@@ -74,7 +77,21 @@ class PIP2 (PtProtocol):
             packet_len >= 6
             ):
             self.process_response(hla_frames, packet)
-
+    
+    def valid_rsp_for_cmd(self, packet):
+        """
+        Validates the response contains same Command ID
+        as the Command expecting a response.
+        Returns:
+            Bool: True when the response packet matches
+            the command expecting a response
+        """
+        packet_len = packet["data"][self.idx_rsp_len_lsb] + \
+            (packet["data"][self.idx_rsp_len_msb] << 8)
+        if packet_len > self.rsp_header_len and packet["data"][self.idx_rsp_cmd_id] & 0x7f == self.cmd_cmd:
+            return True
+        return False
+    
     def process_command(self, hla_frames, packet):
         """
         If expecting_cmd_response is True we there may have been a command that did not
@@ -95,10 +112,11 @@ class PIP2 (PtProtocol):
         self.cmd_cmd_name = PIP2.CMD_DICT.get(self.cmd_cmd)
         self.cmd_crc = (packet["data"][self.cmd_len - self.pip2_index_crc_msb] << 8)
         self.cmd_crc += packet["data"][self.cmd_len - self.pip2_index_crc_lsb]
-        self.cmd_payload = (
-            "0x " + " ".join([f"{x:02X}" for x in
-            packet["data"][self.idx_cmd_payload_start:self.cmd_len]])
-        )
+        if self.cmd_len + self.pip2_cmd_reg_header_len > self.pip2_min_cmd_packet_len:
+            self.cmd_payload = (
+                "0x " + " ".join([f"{x:02X}" for x in
+                packet["data"][self.idx_cmd_payload_start:self.cmd_len]])
+            )
 
         # Commands with no response.
         if self.cmd_cmd == 0x06: # Reset.
@@ -120,6 +138,10 @@ class PIP2 (PtProtocol):
                     "Short Response Packet. Can't determine length."
                 )
                 return
+            if self.valid_rsp_for_cmd(packet) is False:
+                self.expecting_cmd_response = False
+                self.append_frame(hla_frames, "PIP2 Error", "PIP2 command with no response")
+                return
             self.rsp_len = (
                 packet["data"][self.idx_rsp_len_lsb] +
                 (packet["data"][self.idx_rsp_len_msb] << 8)
@@ -139,11 +161,12 @@ class PIP2 (PtProtocol):
             self.rsp_crc = (packet["data"][self.rsp_len + self.idx_rsp_crc_msb] << 8)
             self.rsp_crc += packet["data"][self.rsp_len + self.idx_rsp_crc_lsb]
             payload_end  = self.rsp_len - self.rsp_footer_len
-            self.rsp_payload = (
-                "0x " + \
-                " ".join([f"{x:02X}" for x in
-                    packet["data"][self.idx_rsp_payload_start:payload_end]])
-            )
+            if self.rsp_len > self.rsp_min_rsp_len:
+                self.rsp_payload = (
+                    "0x " + \
+                    " ".join([f"{x:02X}" for x in
+                        packet["data"][self.idx_rsp_payload_start:payload_end]])
+                )
             self.transaction_end_time = packet["end_time"]
             self.expecting_cmd_response = False
             self.append_frame(hla_frames, "PIP2", "")

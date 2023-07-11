@@ -45,10 +45,10 @@ class PtTouchHLA(HighLevelAnalyzer):
             "format": "FW Reset Sentinel"
         },
         "PIP3": {
-            "format": "{{data.Cmd_Name}}: {{data.Status}}"
+            "format": "{{data.Cmd_Name}} {{data.Status}}"
         },
         "PIP3 Error": {
-            "format": "ERROR: {{data.Cmd_Name}}: {{data.Status}}"
+            "format": "ERROR: {{data.Cmd_Name}} {{data.Status}}"
         },
         "PIP2": {
             "format": "{{data.Cmd_Name}}"

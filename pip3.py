@@ -13,12 +13,28 @@ class PIP3 (PtProtocol):
     I2C packet parser.
     """
     PACKET_DATA = (0x25, 0x00, 0x44)
-
+    ASYNC_REPORT_DATA = (0x25, 0x00, 0x45)
+    
+    # Segmentation Control
+    FRPT_MASK = 0x02
+    MRPT_MASK = 0x01
+            
+    # PIP3 Header Masks
+    PIP_3_HEADER_SEQ_MASK = 0x07
+    PIP_3_HEADER_TAG_MASK = 0x08
+    PIP_3_HEADER_M_DATA_MASK = 0x10
+    PIP_3_HEADER_RESP_MASK = 0x80
+    PIP_3_HEADER_CMD_ID_MASK = 0x7f
+    
+    # HID CMD REG CMD format
+    HID_REPORT_ID = 0x4
+    
     # Dictionary of known PIP3 command IDs.
     CMD_DICT = {
             0x00: "Ping",
             0x01: "Status",
             0x04: "Switch Image",
+            0x05: "Switch Active Processor",
             0x07: "Version",
             0x10: "File Open",
             0x11: "File Close",
@@ -74,6 +90,13 @@ class PIP3 (PtProtocol):
 
         self.pkt_data = []
         self.expecting_cmd_response = False
+        self.cmd_end_time = None
+        
+        # PIP3 Unsolicited Async reports
+        self.async_rsp = False
+        self.rsp_initiated = False
+        self.rsp_interrupted = False
+        self.unstitched_async_data = []
 
         # PIP3 Command
         self.pip3_min_cmd_packet_len = 14
@@ -82,9 +105,6 @@ class PIP3 (PtProtocol):
         self.cmd_output_header_len = 5
         self.cmd_header_len = 4
         self.cmd_footer_len = 2
-
-        #self.cmd_pkt_payload[0] = 0
-
 
         self.idx_len_lsb = 0
         self.idx_len_msb = 1
@@ -105,8 +125,9 @@ class PIP3 (PtProtocol):
         self.rsp_idx_cmd_id = 3
         self.rsp_idx_cmd_status = 4
         self.rsp_offset_crc_msb = -1
-        self.rsp_offset_crc_lsb = -0
-
+        self.rsp_offset_crc_lsb = -2
+        
+        self.reset_sentinel_len = 2
 
     def process_i2c_packet(self, hla_frames, packet):
         """
@@ -114,41 +135,57 @@ class PIP3 (PtProtocol):
         packet contents.
         """
         packet_len = len(packet["data"])
-        if packet_len < 2:
+        if packet_len < self.reset_sentinel_len:
             print("Unknown packet. Less than two bytes")
-        elif(packet_len == 2 and packet["read"] is True):
+        elif(packet_len == self.reset_sentinel_len and packet["read"] is True):
             # PIP3 Firmware Reset Sentinel.
             if ((packet["data"][0] == 0x00) and (packet["data"][1] == 0x00)):
                 self.transaction_start_time = packet["start_time"]
                 self.transaction_end_time = packet["end_time"]
+                self.cmd_cmd = None
                 self.cmd_cmd_name = "FW Reset Sentinel"
                 self.expecting_cmd_response = False
                 self.append_frame(hla_frames, "PIP3", "")
         elif packet["write"] is True:
             self.process_command(hla_frames, packet)
+        elif (packet["read"] is True and 
+            tuple(packet["data"][:len(PIP3.ASYNC_REPORT_DATA)]) == PIP3.ASYNC_REPORT_DATA):
+            if (self.expecting_cmd_response is True):
+                self.transaction_end_time = self.cmd_end_time
+                self.expecting_cmd_response = False
+                self.append_frame(hla_frames, "PIP3", "")
+            self.async_rsp = True
+            self.process_response(hla_frames, packet)
         elif (packet["read"] is True and
             tuple(packet["data"][:len(PIP3.PACKET_DATA)]) == PIP3.PACKET_DATA):
+            # Solicited response interrupts Unsolicited report
+            if self.async_rsp is True:
+                self.handle_packet_interrupt(hla_frames)
+            self.async_rsp = False
             self.process_response(hla_frames, packet)
         elif packet["read"] is True:
             if self.expecting_cmd_response is True:
-                self.append_frame(hla_frames, "PIP3", "PIP3 command with no response")
+                self.append_frame(hla_frames, "PIP3 Error", "PIP3 command with no response")
                 self.expecting_cmd_response = False
 
     def pip3_stitch(self, data):
         """
         Adds a HID input report to the PIP3 packet. See 001-30009 for details on how a
-        PIP3 response packet can be broken up in to multiple HID input reports.
+        PIP3 response packet can be broken up into multiple HID input reports.
         """
-        self.pkt_data.extend(data[4:])
+        self.pkt_data.extend(data[self.cmd_header_len:])
 
     def pip3_extract_rsp_payload(self):
         """
         Get the payload data bytes from the PIP3 response.
         """
+        # Async Reports do not contain a Status byte
+        offset = -1 if self.async_rsp else 0
+        
         payload_end_idx = self.rsp_len - self.rsp_footer_len
         if payload_end_idx > self.idx_rsp_payload_start:
             self.rsp_payload = "0x " + " ".join([f"{x:02X}" \
-                for x in self.pkt_data[self.idx_rsp_payload_start:payload_end_idx]])
+                for x in self.pkt_data[self.idx_rsp_payload_start + offset:payload_end_idx]])
 
     def pip3_parse_response_header(self):
         """
@@ -156,12 +193,40 @@ class PIP3 (PtProtocol):
         """
         self.rsp_len = self.pkt_data[self.rsp_idx_len_lsb]
         self.rsp_len += (self.pkt_data[self.rsp_idx_len_msb] << 8)
-        self.rsp_mdata = (self.pkt_data[self.rsp_idx_mdata_tag_seq] & 0x10) >> 4
-        self.rsp_seq = (self.pkt_data[self.rsp_idx_mdata_tag_seq] & 0x07)
-        self.rsp_tag = (self.pkt_data[self.rsp_idx_mdata_tag_seq] & 0x08) >> 3
-        self.rsp_cmd_id = (self.pkt_data[self.rsp_idx_cmd_id] & 0x7F)
-        self.rsp_rsp = (self.pkt_data[self.rsp_idx_cmd_id] & 0x80) >> 7
+        self.rsp_mdata = (self.pkt_data[self.rsp_idx_mdata_tag_seq] & PIP3.PIP_3_HEADER_M_DATA_MASK) >> 4
+        self.rsp_seq = (self.pkt_data[self.rsp_idx_mdata_tag_seq] & PIP3.PIP_3_HEADER_SEQ_MASK)
+        self.rsp_tag = (self.pkt_data[self.rsp_idx_mdata_tag_seq] & PIP3.PIP_3_HEADER_TAG_MASK) >> 3
+        self.rsp_cmd_id = (self.pkt_data[self.rsp_idx_cmd_id] & PIP3.PIP_3_HEADER_CMD_ID_MASK)
+        self.rsp_rsp = (self.pkt_data[self.rsp_idx_cmd_id] & PIP3.PIP_3_HEADER_RESP_MASK) >> 7
         self.rsp_status = self.pkt_data[self.rsp_idx_cmd_status]
+        
+        # async reports do not contain a status byte
+        if self.async_rsp is True:
+            self.rsp_status = None
+
+        if (self.async_rsp or not self.expecting_cmd_response)is True:
+            self.cmd_cmd = self.pkt_data[self.rsp_idx_cmd_id] & PIP3.PIP_3_HEADER_CMD_ID_MASK
+            self.cmd_cmd_name = PIP3.CMD_DICT.get(self.cmd_cmd)
+
+    def handle_packet_interrupt(self, hla_frames):
+        """
+        Async Report handling when interrupted by commands and Solicited reponses
+        """
+        self.rsp_interrupted = True
+        self.transaction_end_time = self.rsp_end_time
+        self.unstitched_async_data = self.pkt_data[:]
+        self.pip3_parse_response_header()
+        self.pip3_remove_zero_padding()
+        self.pip3_extract_rsp_payload()
+        self.append_frame(hla_frames, "PIP3", "")
+    
+    def pip3_parse_response_crc(self):
+        """
+        Extracts the crc of a complete reponse
+        """
+        if self.rsp_initiated is False:
+            self.rsp_crc = self.pkt_data[self.rsp_len + self.rsp_offset_crc_lsb]
+            self.rsp_crc += (self.pkt_data[self.rsp_len + self.rsp_offset_crc_msb] << 8)
 
     def pip3_remove_zero_padding(self):
         """
@@ -175,14 +240,20 @@ class PIP3 (PtProtocol):
         Parse the given data byte as a PIP3 command.
         """
         data_len = len(packet["data"])
+        self.rsp_status = None
+        
         if data_len < (1 + max(
             self.idx_hid_register_address_lsb,
             self.idx_hid_register_address_msb)
 			):
             self.transaction_start_time = packet["start_time"]
             self.transaction_end_time = packet["end_time"]
-            self.append_frame(hla_frames, "PIP3", "ERROR: Short Write Packet")
+            self.append_frame(hla_frames, "PIP3 Error", "ERROR: Short Write Packet")
             return
+
+        if self.rsp_initiated == True:
+            self.handle_packet_interrupt(hla_frames)
+            
         hid_register_address = packet["data"][self.idx_hid_register_address_lsb]
         hid_register_address += (packet["data"][self.idx_hid_register_address_msb] << 8)
 
@@ -203,8 +274,11 @@ class PIP3 (PtProtocol):
         # receive a response. In this case output a command frame for the data we have.
         if self.expecting_cmd_response is True:
             self.append_frame(hla_frames, "PIP3 Error", "PIP3 command with no response")
-
-        self.expecting_cmd_response = True
+         
+         # Check for Report ID
+        if packet["data"][offset - 1] != PIP3.HID_REPORT_ID:
+            return
+        
         self.transaction_start_time = packet["start_time"]
         self.transaction_end_time = packet["end_time"]
 
@@ -225,44 +299,59 @@ class PIP3 (PtProtocol):
             self.append_frame(hla_frames, "PIP3", "ERROR: Short Write Packet.")
             return
 
-        payload_end_idx = (offset + self.idx_cmd_register_payload_start + self.cmd_len) - \
-            (self.cmd_header_len + self.cmd_footer_len)
-        self.cmd_payload = "0x " + " ".join([f"{x:02X}" for x in \
-            packet["data"][offset:payload_end_idx]])
-        self.cmd_seq = packet["data"][offset + self.idx_mdata_tag_seq] & 0x07
-        self.cmd_tag = (packet["data"][offset + self.idx_mdata_tag_seq] & 0x08) >> 3
-        self.cmd_cmd = packet["data"][offset + self.idx_cmd_id] & 0x7F
+        payload_end_idx = (offset + self.cmd_len) - \
+            (self.cmd_footer_len)
+        if (self.cmd_len > (self.cmd_header_len + self.cmd_footer_len)):
+            self.cmd_payload = "0x " + " ".join([f"{x:02X}" for x in \
+                packet["data"][offset + self.cmd_header_len:payload_end_idx]])
+        self.expecting_cmd_response = True 
+        self.cmd_seq = packet["data"][offset + self.idx_mdata_tag_seq] & PIP3.PIP_3_HEADER_SEQ_MASK
+        self.cmd_tag = (packet["data"][offset + self.idx_mdata_tag_seq] & PIP3.PIP_3_HEADER_TAG_MASK) >> 3
+        self.cmd_cmd = packet["data"][offset + self.idx_cmd_id] & PIP3.PIP_3_HEADER_CMD_ID_MASK
         self.cmd_cmd_name = PIP3.CMD_DICT.get(self.cmd_cmd)
-        self.cmd_crc = (packet["data"][offset + self.idx_len_lsb + self.cmd_len - 2] << 8)
-        self.cmd_crc += packet["data"][offset + self.idx_len_msb + self.cmd_len - 2]
-        self.rsp_status = None # Clear value in case a response never comes.
-
+        self.cmd_crc = packet["data"][offset + self.idx_len_lsb + self.cmd_len - self.cmd_footer_len]
+        self.cmd_crc += (packet["data"][offset + self.idx_len_msb + self.cmd_len - self.cmd_footer_len] << 8)
+        self.cmd_end_time = packet["end_time"]
+        
         # Commands with no response
-        if self.cmd_cmd == 0x04: # Switch Image.
+        if self.cmd_cmd == 0x04 or self.cmd_cmd == 0x05: # Switch Image or Switch Active Processor.
             self.expecting_cmd_response = False
             self.append_frame(hla_frames, "PIP3", "")
-
-
 
     def process_response(self, hla_frames, packet):
         """
         Parse the given data byte as a PIP3 response. If the given data is the end of the
         response add a Saleae logic bubble frame for the command and response.
         """
-        pkt_frpt = (packet["data"][self.idx_frpt_mrpt] & 0x02) >> 1
-        pkt_mrpt = (packet["data"][self.idx_frpt_mrpt] & 0x01)
-        if pkt_frpt:
+        pkt_frpt = (packet["data"][self.idx_frpt_mrpt] & PIP3.FRPT_MASK) >> 1
+        pkt_mrpt = (packet["data"][self.idx_frpt_mrpt] & PIP3.MRPT_MASK)
+        self.transaction_end_time = packet["end_time"]
+        self.rsp_end_time = packet["end_time"]
+        
+        if pkt_frpt or self.rsp_interrupted:
             self.rsp_start_time = packet["start_time"]
-            self.rsp_end_time = packet["end_time"]
+            if self.rsp_interrupted or not self.expecting_cmd_response:
+                self.transaction_start_time = self.rsp_start_time
             self.pkt_data = []
-        if not pkt_mrpt:
-            self.rsp_end_time = packet["end_time"]
+            self.rsp_initiated = True
+        
+        if (self.expecting_cmd_response or self.rsp_initiated) is False:
+            self.rsp_start_time = packet["start_time"]
+
+        # Stitching interrupted async reports
+        if self.rsp_interrupted and self.async_rsp:
+            self.pkt_data = self.unstitched_async_data[:]
+            self.rsp_interrupted = False
 
         self.pip3_stitch(packet["data"])
-
+        
         if not pkt_mrpt:
-            self.expecting_cmd_response = False
+            if self.async_rsp:
+                self.transaction_start_time = self.rsp_start_time
             self.transaction_end_time = packet["end_time"]
+            self.expecting_cmd_response = False
+            self.rsp_interrupted = False
+            self.rsp_initiated = False
             if len(self.pkt_data) < self.rsp_min_len:
                 self.append_frame(
                     hla_frames,
@@ -274,6 +363,8 @@ class PIP3 (PtProtocol):
                 )
             else:
                 self.pip3_parse_response_header()
+                self.pip3_parse_response_crc()
                 self.pip3_remove_zero_padding()
                 self.pip3_extract_rsp_payload()
                 self.append_frame(hla_frames, "PIP3", "")
+                
