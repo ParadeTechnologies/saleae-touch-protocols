@@ -41,6 +41,10 @@ class HID1 (PtProtocol):
     IDX_OUT_REGISTER_LENGTH_OF_REPORT_MSB = 3
     IDX_OUT_REGISTER_REPORT_ID = 4
     IDX_OUT_REGISTER_PAYLOAD_START = 5
+    
+    # HID Desciptor Constants
+    W_HID_DESC_LEN = 0x1E
+    IDX_HID_DESCRIPTOR_WMAXINPUTLENGTH = 10
 
     # Dictionary of known PIP HID report IDs
     REPORT_ID_DICT_PIP3 = {
@@ -75,6 +79,7 @@ class HID1 (PtProtocol):
         self.register_address = 0
         self.enable_hid_pip3_reports = False
         self.hid_descriptor_request_active = False
+        self.max_hid_rpt_len = None
 
     def process_i2c_packet(self, hla_frames, packet):
         """
@@ -141,6 +146,9 @@ class HID1 (PtProtocol):
         elif (packet["read"] is True and packet_len >= HID1.IDX_INPUT_REPORT_MIN_LENGTH):
             self.transaction_end_time = packet["end_time"]
             if self.hid_descriptor_request_active:
+                if self.cmd_cmd_name == HID1.REGISTER_DICT[self.REGISTER_ADDRESS_HID_DESCRIPTOR]:
+                    self.debug("Updating Max Input Length")
+                    self.update_max_hid_rpt_length(packet)
                 self.rsp_len = len(packet["data"])
                 self.rsp_payload = "0x " + " ".join([f"{x:02X}" \
                             for x in packet["data"]])
@@ -155,6 +163,9 @@ class HID1 (PtProtocol):
                 self.rsp_payload = "0x " + " ".join([f"{x:02X}" \
                     for x in packet["data"][self.IDX_INPUT_REPORT_PAYLOAD_START:]])
             self.debug(f"{self.enable_hid_pip3_reports}: ID {report_id}")
+            if (self.max_hid_rpt_len is not None and not self.is_valid_hid_report_length(hla_frames, packet)):
+                self.append_frame(hla_frames, "HID1 Error", "Invalid Hid Report Length")
+                return
             if report_id in HID1.REPORT_ID_DICT_PIP3:
                 if self.enable_hid_pip3_reports:
                     self.cmd_cmd_name = HID1.REPORT_ID_DICT_PIP3.get(report_id)
@@ -166,3 +177,27 @@ class HID1 (PtProtocol):
                 self.append_frame(hla_frames, "HID1", "")
             else:
                 self.debug("Unknown HID packet.")
+                
+    def is_valid_hid_report_length(self, hla_frames, packet) -> bool:
+        """
+        Check if the given packet has a valid HID report length.
+        """
+        hid_report_len = packet["data"][HID1.IDX_REGISTER_ADDRESS_LSB] + (packet["data"][HID1.IDX_REGISTER_ADDRESS_MSB] << 8)
+        if len(packet["data"]) == hid_report_len and hid_report_len <= self.max_hid_rpt_len:
+            return True
+        else:
+            self.debug("Invalid HID Report Length.")
+            self.debug(f'Packet length: {len(packet["data"])}')
+            self.debug(f'Hid Header Report length: {hid_report_len}')
+            self.debug(f'Max Report length: {self.max_hid_rpt_len}')
+            return False
+    
+    def update_max_hid_rpt_length(self, packet: dict) -> None:
+        """
+        Update the maximum HID report length based on wMaxInputLength from the HID Descriptor.
+        """
+        if len(packet["data"]) == HID1.W_HID_DESC_LEN:
+            self.max_hid_rpt_len = packet["data"][HID1.IDX_HID_DESCRIPTOR_WMAXINPUTLENGTH]
+            self.debug(f'Updating Max Hid Report Length to {self.max_hid_rpt_len}')
+        else:
+            self.debug(f'Invalid HID Descriptor Length {len(packet["data"])} != {HID1.W_HID_DESC_LEN}')

@@ -41,6 +41,9 @@ class PtTouchHLA(HighLevelAnalyzer):
         "HID1": {
             "format": "{{data.Cmd_Name}}"
         },
+        "HID1 Error": {
+            "format": "ERROR: {{data.Cmd_Name}}"
+        },
         "sentinel": {
             "format": "FW Reset Sentinel"
         },

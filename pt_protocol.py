@@ -110,6 +110,8 @@ class PtProtocol:
         self.rsp_len = None
         self.rsp_payload = None
         self.rsp_crc = None
+        self.transaction_start_time = None
+        self.transaction_end_time = None
 
     def set_verbose_level(self, level):
         """
