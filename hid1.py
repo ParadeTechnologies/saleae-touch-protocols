@@ -3,7 +3,7 @@ HID-I2C Protocol v1 processor. For use with the Parade Technologies Touch Protoc
 High Level Analyzer for the Saleae Logic2 software.
 """
 
-from saleae.analyzers import AnalyzerFrame #pylint: disable=import-error
+from saleae.analyzers import AnalyzerFrame # type: ignore #pylint: disable=import-error
 
 from pt_protocol import PtProtocol
 
@@ -41,8 +41,8 @@ class HID1 (PtProtocol):
     IDX_OUT_REGISTER_LENGTH_OF_REPORT_MSB = 3
     IDX_OUT_REGISTER_REPORT_ID = 4
     IDX_OUT_REGISTER_PAYLOAD_START = 5
-    
-    # HID Desciptor Constants
+
+    # HID Descriptor Constants
     W_HID_DESC_LEN = 0x1E
     IDX_HID_DESCRIPTOR_WMAXINPUTLENGTH = 10
 
@@ -58,7 +58,7 @@ class HID1 (PtProtocol):
         0x01: "Finger",
         0x02: "Pen",
         0x41: "Vendor Specific Finger",
-        0x42: "Vendor Sepcific Pen",
+        0x42: "Vendor Specific Pen",
     }
 
     # Dictionary of known HID register addresses.
@@ -177,7 +177,7 @@ class HID1 (PtProtocol):
                 self.append_frame(hla_frames, "HID1", "")
             else:
                 self.debug("Unknown HID packet.")
-                
+
     def is_valid_hid_report_length(self, hla_frames, packet) -> bool:
         """
         Check if the given packet has a valid HID report length.
@@ -191,7 +191,7 @@ class HID1 (PtProtocol):
             self.debug(f'Hid Header Report length: {hid_report_len}')
             self.debug(f'Max Report length: {self.max_hid_rpt_len}')
             return False
-    
+
     def update_max_hid_rpt_length(self, packet: dict) -> None:
         """
         Update the maximum HID report length based on wMaxInputLength from the HID Descriptor.

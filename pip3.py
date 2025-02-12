@@ -4,7 +4,7 @@ Technologies Touch Protocols High Level Analyzer for the Saleae Logic2 software.
 """
 
 from typing import List
-from saleae.analyzers import AnalyzerFrame #pylint: disable=import-error
+from saleae.analyzers import AnalyzerFrame # type: ignore #pylint: disable=import-error
 from pt_protocol import PtProtocol
 
 class PIP3 (PtProtocol):
@@ -16,21 +16,21 @@ class PIP3 (PtProtocol):
     RSP_HID_RPT_ID_ASYNC = 0x45
     RSP_HID_RPT_ID_SOLICITED = 0x44
     IDX_RSP_HID_RPT_ID = 2
-    
+
     # Segmentation Control
     FRPT_MASK = 0x02
     MRPT_MASK = 0x01
-            
+
     # PIP3 Header Masks
     PIP_3_HEADER_SEQ_MASK = 0x07
     PIP_3_HEADER_TAG_MASK = 0x08
     PIP_3_HEADER_M_DATA_MASK = 0x10
     PIP_3_HEADER_RESP_MASK = 0x80
     PIP_3_HEADER_CMD_ID_MASK = 0x7f
-    
+
     # HID CMD REG CMD format
     HID_REPORT_ID = 0x4
-    
+
     # Dictionary of known PIP3 command IDs.
     CMD_DICT = {
             0x00: "Ping",
@@ -44,6 +44,8 @@ class PIP3 (PtProtocol):
             0x13: "File Write",
             0x14: "File IOCTL",
             0x15: "Flash Info",
+            0x16: "Execute",
+            0x17: "Get Last Errno",
             0x20: "Get Data Block CRC",
             0x22: "Get Data Block",
             0x23: "Set Data Block",
@@ -51,28 +53,36 @@ class PIP3 (PtProtocol):
             0x25: "Load Self Test Param",
             0x26: "Run Self Test",
             0x27: "Get Self Test Results",
-            0x29: "Initalize Baseines",
+            0x29: "Initialize Baselines",
             0x2A: "Execute Scan",
             0x2B: "Retrieve Panel Scan",
             0x2C: "Start Sensor Data",
             0x2D: "Stop Async Debug Data",
             0x2E: "Start Tracking Heatmap",
+            0x2F: "Debug Report",
             0x30: "Calibrate",
             0x31: "Soft Reset",
             0x32: "Get Sysinfo",
             0x33: "Suspend Scanning",
-            0x34: "Resume Scannning",
+            0x34: "Resume Scanning",
             0x35: "Get Param",
             0x36: "Set Param",
             0x37: "Get Noise Metrics",
-            0x38: "?",
             0x39: "Enter Easy Wake",
             0x3A: "Set DBG Parameter",
             0x3B: "Get DBG Parameter",
             0x3C: "Set DDI Reg",
             0x3D: "Get DDI Reg",
-            0x3E: "Start Realtime Signal Data",
+            0x3E: "Start Sensor Scan",
         }
+
+    # Dictionary of known PIP3 command IDs without a PIP response.
+    CMD_NO_RSP_DICT = {
+        0x04: "Switch Image",
+        0x05: "Switch Active Processor",
+        0x16: "Execute",
+        0x31: "Soft Reset"
+    }
 
     def __init__(self):
         PtProtocol.__init__(self)
@@ -128,7 +138,7 @@ class PIP3 (PtProtocol):
         self.rsp_idx_cmd_status = 4
         self.rsp_offset_crc_msb = -1
         self.rsp_offset_crc_lsb = -2
-        
+
         self.reset_sentinel_len = 2
 
     def process_i2c_packet(self, hla_frames, packet):
@@ -183,7 +193,7 @@ class PIP3 (PtProtocol):
         """
         # Async Reports do not contain a Status byte
         offset = -1 if self.async_rsp else 0
-        
+
         payload_end_idx = self.rsp_len - self.rsp_footer_len
         if payload_end_idx > self.idx_rsp_payload_start:
             self.rsp_payload = "0x " + " ".join([f"{x:02X}" \
@@ -201,19 +211,19 @@ class PIP3 (PtProtocol):
         self.rsp_cmd_id = (self.pkt_data[self.rsp_idx_cmd_id] & PIP3.PIP_3_HEADER_CMD_ID_MASK)
         self.rsp_rsp = (self.pkt_data[self.rsp_idx_cmd_id] & PIP3.PIP_3_HEADER_RESP_MASK) >> 7
         self.rsp_status = self.pkt_data[self.rsp_idx_cmd_status]
-        
+
         # async reports do not contain a status byte
         if self.async_rsp is True:
             self.rsp_status = None
             self.async_rsp = False
 
-        if (self.async_rsp or not self.expecting_cmd_response)is True:
+        if (self.async_rsp or not self.expecting_cmd_response) is True:
             self.cmd_cmd = self.pkt_data[self.rsp_idx_cmd_id] & PIP3.PIP_3_HEADER_CMD_ID_MASK
             self.cmd_cmd_name = PIP3.CMD_DICT.get(self.cmd_cmd)
 
     def handle_packet_interrupt(self, packet, hla_frames):
         """
-        Async Report handling when interrupted by commands and Solicited reponses
+        Async Report handling when interrupted by commands and Solicited responses
         """
         if self.transaction_start_time is None:
             self.transaction_start_time = packet["start_time"]
@@ -226,10 +236,10 @@ class PIP3 (PtProtocol):
         self.pip3_remove_zero_padding()
         self.pip3_extract_rsp_payload()
         self.append_frame(hla_frames, "PIP3", "")
-    
+
     def pip3_parse_response_crc(self):
         """
-        Extracts the crc of a complete reponse
+        Extracts the crc of a complete response
         """
         if self.rsp_initiated is False:
             self.rsp_crc = self.pkt_data[self.rsp_len + self.rsp_offset_crc_lsb]
@@ -241,7 +251,7 @@ class PIP3 (PtProtocol):
         padding.
         """
         del self.pkt_data[self.rsp_len:]
-        
+
     def pip3_is_valid_rsp_len(self) -> bool:
         """
         Validated the PIP3 length of Payload
@@ -250,7 +260,7 @@ class PIP3 (PtProtocol):
         if not valid:
             self.debug(f'PIP Data Length {len(self.pkt_data)} != reported PIP3 Length of Payload {self.rsp_len}')
         return valid
-    
+
     def pip3_valid_rsp_id(self, packet) -> bool:
         """
         Validated the response ID matches the command id
@@ -267,7 +277,7 @@ class PIP3 (PtProtocol):
         """
         data_len = len(packet["data"])
         self.rsp_status = None
-        
+
         if data_len < (1 + max(
             self.idx_hid_register_address_lsb,
             self.idx_hid_register_address_msb)
@@ -304,7 +314,7 @@ class PIP3 (PtProtocol):
          # Check for Report ID
         if packet["data"][offset - 1] != PIP3.HID_REPORT_ID:
             return
-        
+
         self.transaction_start_time = packet["start_time"]
         self.transaction_end_time = packet["end_time"]
 
@@ -337,9 +347,9 @@ class PIP3 (PtProtocol):
         self.cmd_crc = packet["data"][offset + self.idx_len_lsb + self.cmd_len - self.cmd_footer_len]
         self.cmd_crc += (packet["data"][offset + self.idx_len_msb + self.cmd_len - self.cmd_footer_len] << 8)
         self.cmd_end_time = packet["end_time"]
-        
+
         # Commands with no response
-        if self.cmd_cmd == 0x04 or self.cmd_cmd == 0x05: # Switch Image or Switch Active Processor.
+        if self.cmd_cmd in self.CMD_NO_RSP_DICT.keys(): # Commands that have no PIP response on successful execution.
             self.expecting_cmd_response = False
             self.append_frame(hla_frames, "PIP3", "")
 
@@ -377,7 +387,7 @@ class PIP3 (PtProtocol):
             self.rsp_interrupted = False
 
         self.pip3_stitch(packet["data"])
-        
+
         if not pkt_mrpt:
             if self.async_rsp and self.rsp_start_time < self.transaction_end_time:
                 self.transaction_start_time = self.rsp_start_time

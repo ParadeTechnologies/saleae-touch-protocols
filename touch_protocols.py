@@ -4,9 +4,9 @@ For more information and documentation, please go to
 https://support.saleae.com/extensions/high-level-analyzer-extensions
 """
 
-from saleae.analyzers import HighLevelAnalyzer #pylint: disable=import-error
-from saleae.analyzers import AnalyzerFrame     #pylint: disable=import-error
-from saleae.analyzers import ChoicesSetting    #pylint: disable=import-error
+from saleae.analyzers import HighLevelAnalyzer # type: ignore #pylint: disable=import-error
+from saleae.analyzers import AnalyzerFrame     # type: ignore #pylint: disable=import-error
+from saleae.analyzers import ChoicesSetting    # type: ignore #pylint: disable=import-error
 
 from hid1 import HID1
 from pip1 import PIP1
@@ -15,7 +15,7 @@ from pip3 import PIP3
 
 class PtTouchHLA(HighLevelAnalyzer):
     """
-    Parade Technologies subclass of the Saleae HighLevelAnalyser class.
+    Parade Technologies subclass of the Saleae HighLevelAnalyzer class.
     """
     selected_protocol = ChoicesSetting(
         ["HID-I2C", "PIP1", "PIP2", "PIP3"], label="Protocol"
@@ -60,7 +60,7 @@ class PtTouchHLA(HighLevelAnalyzer):
             "format": "ERROR: {{data.Cmd_Name}}"
         },
         "PIP1": {
-            "format": "{{data.Cmd_Name}}: {{data.Status}}"
+            "format": "{{data.Cmd_Name}}"
         }
     }
 

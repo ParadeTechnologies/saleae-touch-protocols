@@ -2,7 +2,7 @@
 Parade Technologies Packet Interface Protocol v2 processor. For use with the Parade
 Technologies Touch Protocols High Level Analyzer for the Saleae Logic2 software.
 """
-from saleae.analyzers import AnalyzerFrame #pylint: disable=import-error
+from saleae.analyzers import AnalyzerFrame # type: ignore #pylint: disable=import-error
 
 from pt_protocol import PtProtocol
 
@@ -91,7 +91,7 @@ class PIP2 (PtProtocol):
         if packet_len > self.rsp_header_len and packet["data"][self.idx_rsp_cmd_id] & 0x7f == self.cmd_cmd:
             return True
         return False
-    
+
     def process_command(self, hla_frames, packet):
         """
         If expecting_cmd_response is True we there may have been a command that did not
@@ -99,7 +99,6 @@ class PIP2 (PtProtocol):
         """
         if self.expecting_cmd_response is True:
             self.cmd_cmd_name = PIP2.CMD_DICT.get(self.cmd_cmd)
-            self.debug("C1")
             self.append_frame(hla_frames, "PIP2 Error", "PIP2 command with no response")
         self.expecting_cmd_response = True
         self.transaction_start_time = packet["start_time"]
@@ -131,7 +130,6 @@ class PIP2 (PtProtocol):
         if self.expecting_cmd_response is True:
             packet_len = len(packet["data"])
             if packet_len < max(self.idx_rsp_len_lsb, self.idx_rsp_len_msb):
-                self.debug("1")
                 self.append_frame(
                     hla_frames,
                     "PIP2 Error",

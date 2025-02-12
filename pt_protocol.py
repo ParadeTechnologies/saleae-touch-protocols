@@ -2,7 +2,7 @@
 Parade Technologies base class for Saleae Logic2 High Level Analyzers.
 """
 from typing import List
-from saleae.analyzers import AnalyzerFrame #pylint: disable=import-error
+from saleae.analyzers import AnalyzerFrame # type: ignore #pylint: disable=import-error
 
 class PtProtocol:
     """
