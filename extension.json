@@ -2,7 +2,7 @@
   "name": "Parade Technologies TrueTouch Protocols",
   "apiVersion": "1.0.0",
   "author": "Parade Technologies",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Parade Technologies TrueTouch protocols (PIP1, PIP2, PIP3, HID-I2C)",
   "extensions": {
     "Parade Technologies": {

@@ -309,6 +309,7 @@ class PIP3 (PtProtocol):
         # If expecting_cmd_response is True there may have been a command that did not
         # receive a response. In this case output a command frame for the data we have.
         if self.expecting_cmd_response is True:
+            self.expecting_cmd_response = False
             self.append_frame(hla_frames, "PIP3 Error", "PIP3 command with no response")
 
          # Check for Report ID
